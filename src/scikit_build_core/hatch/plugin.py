@@ -107,8 +107,10 @@ class ScikitBuildHook(BuildHookInterface):  # type: ignore[type-arg]
             required = requires.settings.sdist.cmake
         elif self.target_name == "wheel":
             required = requires.settings.wheel.cmake
+        elif self.target_name == "editable":
+            required = requires.settings.wheel.cmake
         else:
-            msg = f"Unknown target: {self.target_name!r}, only 'sdist' and 'wheel' are supported"
+            msg = f"Unknown target: {self.target_name!r}, only 'sdist', 'wheel', and 'editable' are supported"
             raise ValueError(msg)
 
         # These are only injected if cmake is required
@@ -116,18 +118,14 @@ class ScikitBuildHook(BuildHookInterface):  # type: ignore[type-arg]
         return [*cmake_requires, *requires.dynamic_metadata()]
 
     def initialize(self, version: str, build_data: dict[str, Any]) -> None:
-        if version == "editable":
-            msg = "Editable installs are not yet supported"
-            raise ValueError(msg)
-
         self.__tmp_dir = Path(tempfile.mkdtemp()).resolve()
         try:
-            self._initialize(build_data=build_data)
+            self._initialize(build_data=build_data, version=version)
         except Exception:
             self._cleanup()
             raise
 
-    def _initialize(self, *, build_data: dict[str, Any]) -> None:
+    def _initialize(self, *, build_data: dict[str, Any], version: str) -> None:
         settings_reader = self._read_config()
         settings = settings_reader.settings
         state = settings_reader.state
@@ -137,6 +135,11 @@ class ScikitBuildHook(BuildHookInterface):  # type: ignore[type-arg]
         if state == "sdist":
             build_data["artifacts"].append("CMakeLists.txt")  # Needs full list, etc.
             return
+
+        # For editable installs, build directly into source tree
+        is_editable = version == "editable"
+        if is_editable:
+            logger.info("Building in editable mode (building into source tree)")
 
         setup_logging(settings.logging.level)
 
@@ -178,6 +181,14 @@ class ScikitBuildHook(BuildHookInterface):  # type: ignore[type-arg]
 
         targetlib = "platlib"
 
+        # For editable installs, determine source tree install location
+        if is_editable:
+            # Build directly into source tree
+            if settings.wheel.editable_install_dir:
+                source_install_base = Path(settings.cmake.source_dir) / settings.wheel.editable_install_dir
+            else:
+                source_install_base = Path(settings.cmake.source_dir)
+
         wheel_dirs = {
             targetlib: wheel_dir / targetlib,
             "data": wheel_dir / "data",
@@ -193,7 +204,12 @@ class ScikitBuildHook(BuildHookInterface):  # type: ignore[type-arg]
         if ".." in settings.wheel.install_dir:
             msg = "wheel.install_dir must not contain '..'"
             raise AssertionError(msg)
-        if settings.wheel.install_dir.startswith("/"):
+
+        # For editable installs, install directly to source tree
+        if is_editable:
+            install_dir = source_install_base / settings.wheel.install_dir
+            logger.info("Editable install directory: {}", install_dir)
+        elif settings.wheel.install_dir.startswith("/"):
             if not settings.experimental:
                 msg = "Experimental features must be enabled to use absolute paths in wheel.install_dir"
                 raise AssertionError(msg)
@@ -247,6 +263,11 @@ class ScikitBuildHook(BuildHookInterface):  # type: ignore[type-arg]
 
         rich_print("{green}***", "{bold}Installing project into wheel...")
         builder.install(install_dir)
+
+        # For editable installs, we're done - files are already in source tree
+        if is_editable:
+            logger.info("Editable install complete - extension built in source tree")
+            return
 
         files = list(wheel_dirs["headers"].iterdir())
         if files:

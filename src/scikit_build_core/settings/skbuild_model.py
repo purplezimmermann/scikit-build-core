@@ -316,6 +316,16 @@ class WheelSettings:
     The build tag to use for the wheel. If empty, no build tag is used.
     """
 
+    editable_install_dir: str = ""
+    """
+    The base directory for editable installs, relative to the source directory.
+
+    If not set, defaults to the source directory itself. This is combined with
+    :confval:`wheel.install_dir` to determine the final editable install location.
+
+    Example: ``src/main/python`` would install to ``<source>/src/main/python/<install_dir>``
+    """
+
 
 @dataclasses.dataclass
 class BackportSettings:
